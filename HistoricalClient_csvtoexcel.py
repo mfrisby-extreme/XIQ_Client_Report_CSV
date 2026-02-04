@@ -25,36 +25,51 @@ yearlist = []
 timelist = []
 
 def csv_import(filename):
-    with open(filename, 'r') as file:
+    expected_headers = [
+        'location', 'sublocation', 'associate_vlan', 'device_mac', 'client_mac',
+        'start_time', 'end_time', 'client_ip', 'client_host_name', 'client_os_name',
+        'bssid', 'ssid'
+    ]
+
+    with open(filename, 'r', encoding='utf-8-sig') as file:
         reader = csv.reader(file, delimiter=',')
-        # remove header line from CSV if manually ran
-        #next(reader)
-        #next(reader)
-        loc_params = next(reader)
-        # Build list of location dictionaries
+
+        # Skip garbage lines until we find header
+        for row in reader:
+            if set(expected_headers[:4]).issubset(row):
+                headers = row
+                break
+
+        header_map = {key: headers.index(key) for key in expected_headers if key in headers}
+
         client_list = []
         for row in reader:
-            # location dictionary
+            if len(row) < len(header_map):
+                continue  # skip malformed rows
             data = {}
-            for x in range(len(loc_params)):
-                # for each location parameters add key and value to dictionary
-                data[loc_params[x]] = str(row[x])
+            for key, index in header_map.items():
+                value = row[index].strip() if index < len(row) else ''
+                data[key] = value
             client_list.append(data)
-        return client_list
+
+    return client_list
+
+def normalize_datetime(value):
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%m/%d/%y %H:%M"):
+        try:
+            return datetime.datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"Unrecognized datetime format: {value}")
 
 def calculate_connected_time(start_time, end_time):
-    global monthlist
-    global yearlist
-    global timelist
-    #start_time = datetime.datetime.strptime(start_time, '%m/%d/%y %H:%M')
-    start_time = datetime.datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')
-    monthlist.append(start_time.strftime('%B'))
-    yearlist.append(start_time.strftime('%Y'))
+    global monthlist, yearlist, timelist
+    start = normalize_datetime(start_time)
+    end = normalize_datetime(end_time)
+    monthlist.append(start.strftime('%B'))
+    yearlist.append(start.strftime('%Y'))
     timelist.append(end_time)
-    #end_time = datetime.datetime.strptime(end_time, '%m/%d/%y %H:%M')
-    end_time = datetime.datetime.strptime(end_time, '%Y-%m-%d %H:%M:%S')
-    connected_time = (end_time - start_time).total_seconds()
-    return connected_time
+    return (end - start).total_seconds()
 
 
 print('gathering data from csv')
@@ -63,7 +78,7 @@ print('processing data')
 
 df = pd.DataFrame(client_list)
 df['connected_time'] = df.apply(lambda x: calculate_connected_time(x.start_time, x.end_time), axis=1)
-df['session_date'] = df.apply(lambda x: datetime.datetime.strptime(x.end_time, '%Y-%m-%d %H:%M:%S'), axis=1)
+df['session_date'] = df.apply(lambda x: normalize_datetime(x.end_time), axis=1)
   
 DFList = [group[1] for group in df.groupby(df.session_date.dt.date)]
 df['session_date'] = df.apply(lambda x: x.session_date.strftime('%d-%b'), axis=1)
@@ -72,7 +87,7 @@ monthstr = "{} - {}".format(max(set(monthlist), key= monthlist.count), max(set(y
 # Used for start and end times off to the side of report
 timeset = set(timelist)
 #timeset = sorted(timeset, key=lambda timeset: datetime.datetime.strptime(timeset, '%m/%d/%y %H:%M'))
-timeset = sorted(timeset, key=lambda timeset: datetime.datetime.strptime(timeset, '%Y-%m-%d %H:%M:%S'))
+timeset = sorted(timeset, key=lambda ts: normalize_datetime(ts))
 
 
 print("creating excel report")
