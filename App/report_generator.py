@@ -57,7 +57,7 @@ def csv_import(filepath):
             rows.append(entry)
     return rows
 
-def generate_excel_report(data, selected_sites, output_path, date_from=None, date_to=None, aggregate_floors=False, tab_per_building = False):
+def generate_excel_report(data, selected_sites, output_path, date_from=None, date_to=None, aggregate_floors=False, tab_per_building=False):
 
     df = pd.DataFrame(data)
     df['start_time'] = df['start_time'].apply(normalize_datetime)
@@ -74,37 +74,39 @@ def generate_excel_report(data, selected_sites, output_path, date_from=None, dat
     if date_to:
         df = df[df['session_date'] <= date_to]
 
-    # Order of dates for consistent columns
-    date_cols = sorted(df['session_date'].dt.normalize().unique())
-
     workbook = xlsxwriter.Workbook(output_path)
 
     # Aggregate report (multiple sites)
     if len(selected_sites) > 1:
         agg_df = df[df['location'].isin(selected_sites)]
+        # FIX #3: compute date_cols scoped to this data slice
+        agg_date_cols = sorted(agg_df['session_date'].dt.normalize().unique())
         generate_site_report(
             agg_df,
             "Report",
             workbook,
-            date_cols,
-            aggregate_floors=aggregate_floors
+            agg_date_cols,
+            aggregate_floors=aggregate_floors,
+            is_aggregate=True  # FIX #4: flag so roamer logic can use cross-site scope
         )
 
     # Per-site reports
     for site in selected_sites:
         site_df = df[df['location'] == site]
         if not site_df.empty:
+            # FIX #3: date_cols scoped to this site only
+            site_date_cols = sorted(site_df['session_date'].dt.normalize().unique())
             generate_site_report(
                 site_df,
                 site,
                 workbook,
-                date_cols,
-                aggregate_floors=aggregate_floors
+                site_date_cols,
+                aggregate_floors=aggregate_floors,
+                is_aggregate=False
             )
 
     # Per-building reports (ONLY when aggregating floors)
     if aggregate_floors and tab_per_building:
-        # Only buildings that appear in selected sites
         building_df = df[df['location'].isin(selected_sites)]
 
         for building in sorted(building_df['building'].dropna().unique()):
@@ -113,20 +115,21 @@ def generate_excel_report(data, selected_sites, output_path, date_from=None, dat
             if bldg_df.empty:
                 continue
 
-            # Sheet names must be <= 31 chars and unique
             sheet_name = f"Bldg - {building}"[:31]
+            bldg_date_cols = sorted(bldg_df['session_date'].dt.normalize().unique())
 
             generate_site_report(
                 bldg_df,
                 sheet_name,
                 workbook,
-                date_cols,
-                aggregate_floors=True
+                bldg_date_cols,
+                aggregate_floors=True,
+                is_aggregate=False
             )
 
     workbook.close()
 
-def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=False):
+def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=False, is_aggregate=False):
     worksheet = workbook.add_worksheet(name=sheet_name[:31])
 
     worksheet.set_column('A:A', 20.5)
@@ -134,15 +137,9 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
 
     fmt = lambda **opts: workbook.add_format(opts)
 
-    # ---------- Borders ----------
-    # ---------- Borders ----------
     row_border = {
         'top': 1,
         'bottom': 1
-    }
-
-    day_sep_left = {
-        'left': 2
     }
 
     BORDER_COLOR = '#808080'
@@ -165,7 +162,6 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
         font_size=10, bottom=2
     )
 
-    # Header with vertical day separator (LEFT border)
     header_format_day_sep = fmt(
         align='center', valign='vcenter',
         fg_color='5C5B5A', font_color='white',
@@ -209,7 +205,7 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
     # ---------- Alternating day block formats ----------
     day1_sessions_fmt = fmt(
         bg_color='#F2F2F2', align='right',
-        left=2,right=2, border_color='#808080', **row_border
+        left=2, right=2, border_color='#808080', **row_border
     )
     day1_users_fmt = fmt(
         bg_color='#F2F2F2', align='right',
@@ -218,7 +214,7 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
 
     day2_sessions_fmt = fmt(
         bg_color='#FFFFFF', align='right',
-        left=2,right=2, border_color='#808080', **row_border
+        left=2, right=2, border_color='#808080', **row_border
     )
     day2_users_fmt = fmt(
         bg_color='#FFFFFF', align='right',
@@ -227,8 +223,9 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
 
     # ---------- Title ----------
     month = df['start_time'].dt.strftime('%B').mode()[0]
-    worksheet.merge_range('A1:E1', f"WiFi Statistics Summary Report", merge_format)
-    worksheet.merge_range('A2:A7', sheet_name, label_format)
+    worksheet.merge_range('A1:E1', "WiFi Statistics Summary Report", merge_format)
+    # Label column spans rows 2-9 to accommodate the expanded summary block
+    worksheet.merge_range('A2:A9', sheet_name, label_format)
 
     # ---------- Summary ----------
     worksheet.write('C4', 'Client User Summary', bold_only)
@@ -237,33 +234,67 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
     worksheet.write('C6', len(df))
     worksheet.write('D6', df['client_mac'].nunique())
 
+    group_col = "building" if aggregate_floors else "sublocation"
+
+    # FIX #4: On the aggregate tab, count roamers across site+building combinations
+    # to catch users who roamed across different sites, not just within one site.
+    # On per-site tabs, count roamers across sub-locations/buildings within the site.
+    if is_aggregate:
+        df['_roamer_key'] = df['location'] + ' | ' + df[group_col].astype(str)
+        visits_per_client = df.groupby("client_mac")['_roamer_key'].nunique()
+        df.drop(columns=['_roamer_key'], inplace=True)
+        roamer_label      = "Users Visiting Multiple Sites/Buildings"
+        group_label       = "sites/buildings"
+    else:
+        visits_per_client = df.groupby("client_mac")[group_col].nunique()
+        roamer_label      = "Users Visiting Multiple Buildings" if aggregate_floors else "Users Visiting Multiple Sublocations"
+        group_label       = "buildings" if aggregate_floors else "sublocations"
+
+    multi_loc_clients = int((visits_per_client > 1).sum())
+    # Extra appearances = sum of (groups_visited - 1) per roamer.
+    # This is the number that reconciles the totals:
+    #   sum(per-group unique users) = total unique users + extra appearances
+    extra_appearances = int((visits_per_client[visits_per_client > 1] - 1).sum())
+
+    note_fmt = fmt(italic=1, font_size=9, font_color='#444444')
+
+    worksheet.write("C7",  roamer_label, bold_only)
+    worksheet.write("D7",  multi_loc_clients)
+    worksheet.write("C8",  f"Extra {group_label} appearances (from roamers)", bold_only)
+    worksheet.write("D8",  extra_appearances)
+    worksheet.write("C9",  "Sum of per-group users = Total Users + Extra Appearances", note_fmt)
+    worksheet.write("D9",  f"{df['client_mac'].nunique()} + {extra_appearances} = {df['client_mac'].nunique() + extra_appearances}", note_fmt)
+
     # ---------- Static headers ----------
-    worksheet.write('A8', 'Locations', header_format)
-    worksheet.write('B8', 'SSID', header_format)
-    worksheet.write('C8', 'Number of Sessions', header_format)
-    worksheet.write('D8', 'Number of Users', header_format)
-    worksheet.write('E8', '', header_format)
+    # Summary now ends at row 9; column headers on row 11, day-totals on row 12.
+    HEADER_ROW   = 10   # 0-indexed (Excel row 11)
+    TOTAL_ROW    = 11   # 0-indexed (Excel row 12)
+    worksheet.write(HEADER_ROW, 0, 'Locations',         header_format)
+    worksheet.write(HEADER_ROW, 1, 'SSID',              header_format)
+    worksheet.write(HEADER_ROW, 2, 'Number of Sessions',header_format)
+    worksheet.write(HEADER_ROW, 3, 'Number of Users',   header_format)
+    worksheet.write(HEADER_ROW, 4, '',                  header_format)
 
     # ---------- Day headers ----------
     for idx, day in enumerate(date_cols):
         base_col = 5 + (idx * 2)
 
+        # Day-name label merges above the Sessions/Users row
         worksheet.merge_range(
-            5, base_col, 5, base_col + 1,
+            HEADER_ROW - 1, base_col, HEADER_ROW - 1, base_col + 1,
             day.strftime('%d-%b'),
             day_header_center
         )
-
-        worksheet.write(6, base_col,     'Sessions', header_format_day_sep)
-        worksheet.write(6, base_col + 1, 'Users',    header_format)
+        # Sessions/Users sub-labels on the header row
+        worksheet.write(HEADER_ROW, base_col,     'Sessions', header_format_day_sep)
+        worksheet.write(HEADER_ROW, base_col + 1, 'Users',    header_format)
 
         day_df = df[df['session_date'].dt.normalize() == day]
-
         sessions_fmt = day1_sessions_fmt if idx % 2 == 0 else day2_sessions_fmt
         users_fmt    = day1_users_fmt    if idx % 2 == 0 else day2_users_fmt
 
-        worksheet.write(7, base_col,     len(day_df), sessions_fmt)
-        worksheet.write(7, base_col + 1, day_df['client_mac'].nunique(), users_fmt)
+        worksheet.write(TOTAL_ROW, base_col,     len(day_df),                    sessions_fmt)
+        worksheet.write(TOTAL_ROW, base_col + 1, day_df['client_mac'].nunique(), users_fmt)
 
     # ---------- Time range ----------
     total_col = 5 + (len(date_cols) * 2)
@@ -276,7 +307,10 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
     worksheet.write(6, total_col + 3, str(timeset[-1]))
 
     # ---------- Data rows ----------
-    cursor = 8
+    # First data row is Excel row 13 (1-indexed 13 = cursor starts at 12,
+    # then cursor += 1 before each write brings it to 13).
+    cursor = 12
+    group_rows = []  # will hold the 1-indexed Excel rows for each building/sublocation
 
     for location in df['location'].unique():
         loc_df = df[df['location'] == location]
@@ -293,6 +327,7 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
             sessions_fmt = day1_sessions_fmt if i % 2 == 0 else day2_sessions_fmt
             users_fmt    = day1_users_fmt    if i % 2 == 0 else day2_users_fmt
 
+            # FIX #2: use cursor - 1 consistently (0-indexed = 1-indexed cursor minus 1)
             worksheet.write(cursor - 1, base_col,     len(day_df), sessions_fmt)
             worksheet.write(cursor - 1, base_col + 1, day_df['client_mac'].nunique(), users_fmt)
 
@@ -316,11 +351,10 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
                 worksheet.write(cursor - 1, base_col + 1, day_df['client_mac'].nunique(), users_fmt)
 
         # Building / sublocation rows
-        group_col = "building" if aggregate_floors else "sublocation"
-
         for name in loc_df[group_col].dropna().unique():
             sub_df = loc_df[loc_df[group_col] == name]
             cursor += 1
+            group_rows.append(cursor)  # track this row for the chart
 
             worksheet.write(f'A{cursor}', f"        {name}", sub_site_loc_format)
             worksheet.write(f'C{cursor}', len(sub_df), sub_site_format)
@@ -341,20 +375,42 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
         worksheet.set_column(base_col, base_col, 14.8)
         worksheet.set_column(base_col + 1, base_col + 1, 14.8)
 
-    # # SSID pie chart
-    # ssid_counts = df['ssid'].value_counts()
-    # chart_row = cursor + 5
-    # worksheet.merge_range(f'A{chart_row}:E{chart_row}', 'Unique Clients by SSID', merge_format)
-    #
-    # for i, (ssid, count) in enumerate(ssid_counts.items()):
-    #     worksheet.write(chart_row + 1 + i, total_col + 7, ssid)
-    #     worksheet.write(chart_row + 1 + i, total_col + 8, count)
-    #
-    # chart = workbook.add_chart({'type': 'pie'})
-    # chart.add_series({
-    #     'categories': [sheet_name[:31], chart_row + 1, total_col + 7, chart_row + len(ssid_counts), total_col + 7],
-    #     'values':     [sheet_name[:31], chart_row + 1, total_col + 8, chart_row + len(ssid_counts), total_col + 8],
-    # })
-    # chart.set_style(10)
-    # chart.set_size({'width': 540, 'height': 432})
-    # worksheet.insert_chart(f'A{chart_row + 1}', chart, {'x_offset': 25, 'y_offset': 15})
+    # ---------- Bar chart (summary/aggregate tabs only) ----------
+    # Skip chart on per-building sub-tabs (sheet names starting with "Bldg - ")
+    if sheet_name.startswith("Bldg - ") or not group_rows:
+        return
+
+    sname = sheet_name[:31]
+    n_groups = len(group_rows)
+    first_row = group_rows[0] - 1   # 0-indexed
+    last_row  = group_rows[-1] - 1  # 0-indexed
+
+    chart = workbook.add_chart({'type': 'bar'})  # 'bar' = horizontal in xlsxwriter
+
+    chart.add_series({
+        'name':        'Number of Sessions',
+        'categories':  [sname, first_row, 0, last_row, 0],  # col A = location names
+        'values':      [sname, first_row, 2, last_row, 2],  # col C = sessions
+        'fill':        {'color': '#4FC3C8'},
+        'data_labels': {'value': True, 'font': {'size': 8}},
+    })
+    chart.add_series({
+        'name':        'Number of Users',
+        'categories':  [sname, first_row, 0, last_row, 0],  # col A = location names
+        'values':      [sname, first_row, 3, last_row, 3],  # col D = users
+        'fill':        {'color': '#1A6B7C'},
+        'data_labels': {'value': True, 'font': {'size': 8}},
+    })
+
+    group_label_title = "Building" if aggregate_floors else "Sublocation"
+    chart.set_title({'name': f'{sname} — Session & User Count Chart'})
+    chart.set_x_axis({'name': 'Count', 'major_gridlines': {'visible': True}})
+    chart.set_y_axis({'name': group_label_title, 'reverse': True})
+    chart.set_legend({'position': 'top'})
+    chart.set_style(2)
+
+    chart_height = min(max(300, n_groups * 40 + 100), 900)
+    chart.set_size({'width': 900, 'height': chart_height})
+
+    chart_anchor_row = cursor + 2
+    worksheet.insert_chart(f'A{chart_anchor_row}', chart, {'x_offset': 5, 'y_offset': 5})

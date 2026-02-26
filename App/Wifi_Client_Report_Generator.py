@@ -1,6 +1,9 @@
 # gui_main.py
 
 import sys
+import os
+import subprocess
+from pathlib import Path
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QFileDialog,
     QListWidget, QLabel, QMessageBox, QListWidgetItem, QCheckBox, QDateEdit, QHBoxLayout
@@ -65,6 +68,17 @@ class ReportUI(QWidget):
         self.setLayout(layout)
         self.data = []
         self.file_path = ""
+
+    @staticmethod
+    def open_in_default_app(path: str) -> None:
+        p = str(Path(path).resolve())
+
+        if sys.platform.startswith("darwin"):  # macOS
+            subprocess.run(["open", p], check=False)
+        elif os.name == "nt":  # Windows
+            os.startfile(p)  # type: ignore[attr-defined]
+        else:  # Linux
+            subprocess.run(["xdg-open", p], check=False)
 
     def load_csv(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -143,6 +157,8 @@ class ReportUI(QWidget):
             return
 
         output_path, _ = QFileDialog.getSaveFileName(self, "Save Excel Report", "", "Excel Files (*.xlsx)")
+        if not output_path:
+            return
         if not output_path.endswith('.xlsx'):
             output_path += '.xlsx'
         date_from = datetime.combine(self.date_from.date().toPyDate(), datetime.min.time())
@@ -160,7 +176,7 @@ class ReportUI(QWidget):
 
             QMessageBox.information(self, "Done", f"Report saved to:\n{output_path}")
             if self.open_after_checkbox.isChecked():
-                webbrowser.open(output_path)
+                self.open_in_default_app(output_path)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
