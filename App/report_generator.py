@@ -230,7 +230,7 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
     # ---------- Summary ----------
     worksheet.write('C4', 'Client User Summary', bold_only)
     worksheet.write('C5', 'Number of Sessions', bottom_title)
-    worksheet.write('D5', 'Number of Users', bottom_title)
+    worksheet.write('D5', 'Number of Unique Users', bottom_title)
     worksheet.write('C6', len(df))
     worksheet.write('D6', df['client_mac'].nunique())
 
@@ -272,7 +272,7 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
     worksheet.write(HEADER_ROW, 0, 'Locations',         header_format)
     worksheet.write(HEADER_ROW, 1, 'SSID',              header_format)
     worksheet.write(HEADER_ROW, 2, 'Number of Sessions',header_format)
-    worksheet.write(HEADER_ROW, 3, 'Number of Users',   header_format)
+    worksheet.write(HEADER_ROW, 3, 'Number of Unique Users',   header_format)
     worksheet.write(HEADER_ROW, 4, '',                  header_format)
 
     # ---------- Day headers ----------
