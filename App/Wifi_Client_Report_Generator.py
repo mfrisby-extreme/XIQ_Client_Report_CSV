@@ -140,7 +140,7 @@ class ReportUI(QWidget):
         self.data      = []
         self.file_path = ""
 
-        self.setWindowTitle("WiFi Client Report Generator")
+        self.setWindowTitle(f"WiFi Client Report Generator v{APP_VERSION}")
         self.setMinimumWidth(480)
         self.setStyleSheet(build_style(is_dark))
 
