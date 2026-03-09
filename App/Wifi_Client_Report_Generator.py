@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QStatusBar, QMenuBar, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QDate, QUrl
-from PyQt6.QtGui import QDesktopServices, QFont, QPalette
+from PyQt6.QtGui import QDesktopServices, QFont, QPalette, QColor
 
 from report_generator import ingest_files, generate_excel_report, normalize_datetime
 from datetime import datetime
@@ -66,12 +66,17 @@ QCheckBox {
 }
 
 QPushButton#secondary {
-    border: 1px solid palette(mid);
+    border: 1px solid palette(shadow);
     border-radius: 4px;
     padding: 5px 14px;
+    background-color: palette(button);
+    color: palette(button-text);
 }
 QPushButton#secondary:hover {
     background-color: palette(midlight);
+}
+QPushButton#secondary:pressed {
+    background-color: palette(mid);
 }
 
 QPushButton#primary {
@@ -384,6 +389,19 @@ class ReportUI(QWidget):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+
+    # If the system is in dark mode, lighten the window background slightly
+    # so it isn't quite as stark as the default near-black.
+    base_color = app.palette().color(QPalette.ColorRole.Window)
+    is_dark = base_color.lightness() < 128
+    if is_dark:
+        palette = app.palette()
+        softer = base_color.lighter(140)   # ~#2b2b2b range instead of near-black
+        palette.setColor(QPalette.ColorRole.Window,     softer)
+        palette.setColor(QPalette.ColorRole.Base,       base_color.lighter(120))
+        palette.setColor(QPalette.ColorRole.AlternateBase, base_color.lighter(130))
+        app.setPalette(palette)
+
     window = ReportUI()
     window.show()
     sys.exit(app.exec())
