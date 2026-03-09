@@ -132,8 +132,11 @@ def generate_excel_report(data, selected_sites, output_path, date_from=None, dat
 def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=False, is_aggregate=False):
     worksheet = workbook.add_worksheet(name=sheet_name[:31])
 
-    worksheet.set_column('A:A', 20.5)
+    worksheet.set_column('A:A', 30)
     worksheet.set_column(1, 35, 14.8)
+    worksheet.set_column('C:C', 30)  # Number of Sessions
+    worksheet.set_column('D:D', 20)  # Number of Unique Users
+    worksheet.set_column('E:E', 20)  # Number of Users
 
     fmt = lambda **opts: workbook.add_format(opts)
 
@@ -231,8 +234,26 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
     worksheet.write('C4', 'Client User Summary', bold_only)
     worksheet.write('C5', 'Number of Sessions', bottom_title)
     worksheet.write('D5', 'Number of Unique Users', bottom_title)
+    worksheet.write_comment('D5',
+                            'This is the total number of unique mac addresses over the time period. '
+                            'A single user/device is counted only once regardless of how many '
+                            'times/days they visited.',
+                            {'x_scale': 2, 'y_scale': 1.5}
+                            )
+    worksheet.write('E5', 'Number of Users', bottom_title)
+    worksheet.write_comment('E5',
+                            'This is the sum of each day\'s unique user count with no cross-day '
+                            'deduplication. A user who visits on 3 different days is counted 3 times here, ',
+                            {'x_scale': 2.5, 'y_scale': 2}
+                            )
     worksheet.write('C6', len(df))
     worksheet.write('D6', df['client_mac'].nunique())
+    # Sum of per-day unique user counts — no cross-day deduplication.
+    # This matches what the daily columns add up to, explaining the gap vs column D.
+    daily_user_sum = int(
+        df.groupby(df['session_date'].dt.normalize())['client_mac'].nunique().sum()
+    )
+    worksheet.write('E6', daily_user_sum)
 
     group_col = "building" if aggregate_floors else "sublocation"
 
@@ -269,11 +290,11 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
     # Summary now ends at row 9; column headers on row 11, day-totals on row 12.
     HEADER_ROW   = 10   # 0-indexed (Excel row 11)
     TOTAL_ROW    = 11   # 0-indexed (Excel row 12)
-    worksheet.write(HEADER_ROW, 0, 'Locations',         header_format)
-    worksheet.write(HEADER_ROW, 1, 'SSID',              header_format)
-    worksheet.write(HEADER_ROW, 2, 'Number of Sessions',header_format)
-    worksheet.write(HEADER_ROW, 3, 'Number of Unique Users',   header_format)
-    worksheet.write(HEADER_ROW, 4, '',                  header_format)
+    worksheet.write(HEADER_ROW, 0, 'Locations',                        header_format)
+    worksheet.write(HEADER_ROW, 1, 'SSID',                             header_format)
+    worksheet.write(HEADER_ROW, 2, 'Number of Sessions',               header_format)
+    worksheet.write(HEADER_ROW, 3, 'Number of Unique Users',           header_format)
+    worksheet.write(HEADER_ROW, 4, 'Number of Users',  header_format)
 
     # ---------- Day headers ----------
     for idx, day in enumerate(date_cols):
@@ -295,6 +316,12 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
 
         worksheet.write(TOTAL_ROW, base_col,     len(day_df),                    sessions_fmt)
         worksheet.write(TOTAL_ROW, base_col + 1, day_df['client_mac'].nunique(), users_fmt)
+
+    # Column E total row: sum of daily unique users across all days
+    total_daily_sum = int(
+        df.groupby(df['session_date'].dt.normalize())['client_mac'].nunique().sum()
+    )
+    worksheet.write(TOTAL_ROW, 4, total_daily_sum, day1_users_fmt)
 
     # ---------- Time range ----------
     total_col = 5 + (len(date_cols) * 2)
@@ -319,6 +346,7 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
         worksheet.write(f'A{cursor}', f"    {location}", main_site_loc_format)
         worksheet.write(f'C{cursor}', len(loc_df), main_site_format)
         worksheet.write(f'D{cursor}', loc_df['client_mac'].nunique(), main_site_format)
+        worksheet.write(f'E{cursor}', int(loc_df.groupby(loc_df['session_date'].dt.normalize())['client_mac'].nunique().sum()), main_site_format)
 
         for i, day in enumerate(date_cols):
             base_col = 5 + (i * 2)
@@ -339,6 +367,7 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
             worksheet.write(f'B{cursor}', f"    {ssid}", ssid_name_format)
             worksheet.write(f'C{cursor}', len(ssid_df), ssid_format)
             worksheet.write(f'D{cursor}', ssid_df['client_mac'].nunique(), ssid_format)
+            worksheet.write(f'E{cursor}', int(ssid_df.groupby(ssid_df['session_date'].dt.normalize())['client_mac'].nunique().sum()), ssid_format)
 
             for i, day in enumerate(date_cols):
                 base_col = 5 + (i * 2)
@@ -359,6 +388,7 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
             worksheet.write(f'A{cursor}', f"        {name}", sub_site_loc_format)
             worksheet.write(f'C{cursor}', len(sub_df), sub_site_format)
             worksheet.write(f'D{cursor}', sub_df['client_mac'].nunique(), sub_site_format)
+            worksheet.write(f'E{cursor}', int(sub_df.groupby(sub_df['session_date'].dt.normalize())['client_mac'].nunique().sum()), sub_site_format)
 
             for i, day in enumerate(date_cols):
                 base_col = 5 + (i * 2)
@@ -375,32 +405,40 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
         worksheet.set_column(base_col, base_col, 14.8)
         worksheet.set_column(base_col + 1, base_col + 1, 14.8)
 
-    # ---------- Bar chart (summary/aggregate tabs only) ----------
-    # Skip chart on per-building sub-tabs (sheet names starting with "Bldg - ")
+        # ---------- Bar chart (summary/aggregate tabs only) ----------
+        # Skip chart on per-building sub-tabs (sheet names starting with "Bldg - ")
     if sheet_name.startswith("Bldg - ") or not group_rows:
         return
 
     sname = sheet_name[:31]
     n_groups = len(group_rows)
-    first_row = group_rows[0] - 1   # 0-indexed
-    last_row  = group_rows[-1] - 1  # 0-indexed
+    first_row = group_rows[0] - 1  # 0-indexed
+    last_row = group_rows[-1] - 1  # 0-indexed
 
     chart = workbook.add_chart({'type': 'bar'})  # 'bar' = horizontal in xlsxwriter
 
     chart.add_series({
-        'name':        'Number of Sessions',
-        'categories':  [sname, first_row, 0, last_row, 0],  # col A = location names
-        'values':      [sname, first_row, 2, last_row, 2],  # col C = sessions
-        'fill':        {'color': '#4FC3C8'},
+        'name': 'Number of Sessions',
+        'categories': [sname, first_row, 0, last_row, 0],  # col A = location names
+        'values': [sname, first_row, 2, last_row, 2],  # col C = sessions
+        'fill': {'color': '#4FC3C8'},
         'data_labels': {'value': True, 'font': {'size': 8}},
     })
     chart.add_series({
-        'name':        'Number of Users',
-        'categories':  [sname, first_row, 0, last_row, 0],  # col A = location names
-        'values':      [sname, first_row, 3, last_row, 3],  # col D = users
-        'fill':        {'color': '#1A6B7C'},
+        'name': 'Number of Users',
+        'categories': [sname, first_row, 0, last_row, 0],  # col A = location names
+        'values': [sname, first_row, 4, last_row, 4],  # col E = daily sum
+        'fill': {'color': '#A8D5B5'},
         'data_labels': {'value': True, 'font': {'size': 8}},
     })
+    chart.add_series({
+        'name': 'Number of Unique Users',
+        'categories': [sname, first_row, 0, last_row, 0],  # col A = location names
+        'values': [sname, first_row, 3, last_row, 3],  # col D = unique users
+        'fill': {'color': '#1A6B7C'},
+        'data_labels': {'value': True, 'font': {'size': 8}},
+    })
+
 
     group_label_title = "Building" if aggregate_floors else "Sublocation"
     chart.set_title({'name': f'{sname} — Session & User Count Chart'})
