@@ -22,101 +22,127 @@ REPO_URL    = "https://github.com/mfrisby-extreme/XIQ_Client_Report_CSV"
 
 # ---------- Stylesheet ----------
 # ---------- Stylesheet ----------
-# Colors are intentionally omitted so Qt inherits the system palette,
-# which automatically respects light/dark mode on all platforms.
-# Only structural properties (radius, padding, spacing) are hardcoded.
-STYLE = """
-QGroupBox {
+# We build the stylesheet at runtime so we can inject literal hex colours
+# that are guaranteed to be visible in both light and dark mode.
+# palette() references in Qt stylesheets don't resolve reliably on Windows.
+
+def build_style(is_dark: bool) -> str:
+    if is_dark:
+        border      = "#666668"   # clearly visible against dark backgrounds
+        input_bg    = "#1e1e1e"   # noticeably darker than window for depth
+        input_fg    = "#e0e0e0"
+        muted_fg    = "#888888"
+        hover_bg    = "#505055"
+        pressed_bg  = "#333338"
+        btn_bg      = "#45454a"   # distinct from both window and input
+    else:
+        border      = "#aaaaaa"
+        input_bg    = "#ffffff"
+        input_fg    = "#1f2937"
+        muted_fg    = "#6b7280"
+        hover_bg    = "#f0f0f0"
+        pressed_bg  = "#e0e0e0"
+        btn_bg      = "#f5f5f5"
+
+    return f"""
+QGroupBox {{
     font-weight: bold;
     font-size: 12px;
-    border: 1px solid palette(mid);
+    border: 1px solid {border};
     border-radius: 6px;
     margin-top: 10px;
     padding-top: 6px;
-}
-QGroupBox::title {
+}}
+QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
     padding: 0 6px;
     left: 10px;
-}
+}}
 
-QListWidget {
-    border: 1px solid palette(mid);
+QListWidget {{
+    border: 1px solid {border};
     border-radius: 4px;
     padding: 2px;
-}
-QListWidget::item {
+    background-color: {input_bg};
+    color: {input_fg};
+}}
+QListWidget::item {{
     padding: 4px 6px;
     border-radius: 3px;
-}
-QListWidget::item:selected {
+}}
+QListWidget::item:selected {{
     background-color: palette(highlight);
     color: palette(highlighted-text);
-}
+}}
+QListWidget:disabled {{
+    color: {muted_fg};
+}}
 
-QDateEdit {
-    border: 1px solid palette(mid);
+QDateEdit {{
+    border: 1px solid {border};
     border-radius: 4px;
     padding: 3px 6px;
-}
+    background-color: {input_bg};
+    color: {input_fg};
+}}
+QDateEdit:disabled {{
+    color: {muted_fg};
+}}
 
-QCheckBox {
+QCheckBox {{
     spacing: 6px;
-}
+}}
 
-QPushButton#secondary {
-    border: 1px solid palette(shadow);
+QPushButton#secondary {{
+    border: 1px solid {border};
     border-radius: 4px;
     padding: 5px 14px;
-    background-color: palette(button);
-    color: palette(button-text);
-}
-QPushButton#secondary:hover {
-    background-color: palette(midlight);
-}
-QPushButton#secondary:pressed {
-    background-color: palette(mid);
-}
+    background-color: {btn_bg};
+    color: {input_fg};
+}}
+QPushButton#secondary:hover {{
+    background-color: {hover_bg};
+}}
+QPushButton#secondary:pressed {{
+    background-color: {pressed_bg};
+}}
 
-QPushButton#primary {
+QPushButton#primary {{
     background-color: palette(highlight);
     color: palette(highlighted-text);
     border: none;
     border-radius: 4px;
     padding: 6px 20px;
     font-weight: bold;
-}
-QPushButton#primary:hover {
-    background-color: palette(highlight);
-    opacity: 0.85;
-}
-QPushButton#primary:disabled {
-    background-color: palette(mid);
-    color: palette(shadow);
-}
+}}
+QPushButton#primary:disabled {{
+    background-color: {border};
+    color: {muted_fg};
+}}
 
-QStatusBar {
-    border-top: 1px solid palette(mid);
+QStatusBar {{
+    border-top: 1px solid {border};
     font-size: 11px;
     padding: 2px 8px;
-}
+    color: {muted_fg};
+}}
 
-QMenuBar {
-    border-bottom: 1px solid palette(mid);
-}
+QMenuBar {{
+    border-bottom: 1px solid {border};
+}}
 """
 
 
 class ReportUI(QWidget):
-    def __init__(self):
+    def __init__(self, is_dark: bool = False):
         super().__init__()
         self.data      = []
         self.file_path = ""
 
         self.setWindowTitle("WiFi Client Report Generator")
         self.setMinimumWidth(480)
-        self.setStyleSheet(STYLE)
+        self.setStyleSheet(build_style(is_dark))
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -162,7 +188,7 @@ class ReportUI(QWidget):
         self.load_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.load_btn.clicked.connect(self.load_csv)
         self.file_label = QLabel("No file loaded")
-        self.file_label.setStyleSheet("color: #6b7280; font-size: 11px;")
+        self.file_label.setStyleSheet("font-size: 11px;")
         self.file_label.setWordWrap(True)
         load_row.addWidget(self.load_btn)
         load_row.addWidget(self.file_label, 1)
@@ -390,18 +416,38 @@ class ReportUI(QWidget):
 if __name__ == '__main__':
     app = QApplication(sys.argv)
 
-    # If the system is in dark mode, lighten the window background slightly
-    # so it isn't quite as stark as the default near-black.
+    # Detect dark mode and apply a full adjusted palette with proper contrast
     base_color = app.palette().color(QPalette.ColorRole.Window)
     is_dark = base_color.lightness() < 128
+
     if is_dark:
         palette = app.palette()
-        softer = base_color.lighter(140)   # ~#2b2b2b range instead of near-black
-        palette.setColor(QPalette.ColorRole.Window,     softer)
-        palette.setColor(QPalette.ColorRole.Base,       base_color.lighter(120))
-        palette.setColor(QPalette.ColorRole.AlternateBase, base_color.lighter(130))
+
+        window_bg   = QColor(40, 40, 43)      # window / group box background
+        input_bg    = QColor(30, 30, 30)      # inputs — darker for depth contrast
+        border      = QColor(102, 102, 104)   # matches build_style #666668
+        text        = QColor(224, 224, 224)
+        subtle_text = QColor(136, 136, 136)
+        btn_bg      = QColor(69, 69, 74)      # matches build_style #45454a
+
+        palette.setColor(QPalette.ColorRole.Window,          window_bg)
+        palette.setColor(QPalette.ColorRole.WindowText,      text)
+        palette.setColor(QPalette.ColorRole.Base,            input_bg)
+        palette.setColor(QPalette.ColorRole.AlternateBase,   window_bg)
+        palette.setColor(QPalette.ColorRole.Text,            text)
+        palette.setColor(QPalette.ColorRole.PlaceholderText, subtle_text)
+        palette.setColor(QPalette.ColorRole.Button,          btn_bg)
+        palette.setColor(QPalette.ColorRole.ButtonText,      text)
+        palette.setColor(QPalette.ColorRole.Mid,             border)
+        palette.setColor(QPalette.ColorRole.Shadow,          border)
+        palette.setColor(QPalette.ColorRole.Dark,            QColor(20, 20, 22))
+        palette.setColor(QPalette.ColorRole.Midlight,        QColor(75, 75, 80))
+        palette.setColor(QPalette.ColorGroup.Disabled,
+                         QPalette.ColorRole.Text,            subtle_text)
+        palette.setColor(QPalette.ColorGroup.Disabled,
+                         QPalette.ColorRole.ButtonText,      subtle_text)
         app.setPalette(palette)
 
-    window = ReportUI()
+    window = ReportUI(is_dark=is_dark)
     window.show()
     sys.exit(app.exec())
