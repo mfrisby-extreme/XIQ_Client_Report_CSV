@@ -247,16 +247,19 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
                             {'x_scale': 2.5, 'y_scale': 2}
                             )
 
+    # group_col is needed for daily_user_sum so must be defined first
+    group_col = "building" if aggregate_floors else "sublocation"
+
     worksheet.write('C6', len(df))
     worksheet.write('D6', df['client_mac'].nunique())
-    # Sum of per-day unique user counts — no cross-day deduplication.
-    # This matches what the daily columns add up to, explaining the gap vs column D.
+    # Sum of per-group unique users across all days.
+    # A device visiting 2 buildings on the same day counts once per building,
+    # matching how per-building rows are calculated so all totals roll up cleanly.
     daily_user_sum = int(
-        df.groupby(df['session_date'].dt.normalize())['client_mac'].nunique().sum()
+        df.groupby([df['session_date'].dt.normalize(), group_col])['client_mac']
+        .nunique().sum()
     )
     worksheet.write('E6', daily_user_sum)
-
-    group_col = "building" if aggregate_floors else "sublocation"
 
     # FIX #4: On the aggregate tab, count roamers across site+building combinations
     # to catch users who roamed across different sites, not just within one site.
@@ -332,12 +335,17 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
         sessions_fmt = day1_sessions_fmt if idx % 2 == 0 else day2_sessions_fmt
         users_fmt    = day1_users_fmt    if idx % 2 == 0 else day2_users_fmt
 
-        worksheet.write(TOTAL_ROW, base_col,     len(day_df),                    sessions_fmt)
-        worksheet.write(TOTAL_ROW, base_col + 1, day_df['client_mac'].nunique(), users_fmt)
+        worksheet.write(TOTAL_ROW, base_col, len(day_df), sessions_fmt)
+        # Sum of per-group unique users for this day — consistent with per-building rows
+        day_group_users = int(
+            day_df.groupby(group_col)['client_mac'].nunique().sum()
+        )
+        worksheet.write(TOTAL_ROW, base_col + 1, day_group_users, users_fmt)
 
-    # Column E total row: sum of daily unique users across all days
+    # Column E total: sum of per-group unique users across all days
     total_daily_sum = int(
-        df.groupby(df['session_date'].dt.normalize())['client_mac'].nunique().sum()
+        df.groupby([df['session_date'].dt.normalize(), group_col])['client_mac']
+        .nunique().sum()
     )
     worksheet.write(TOTAL_ROW, 4, total_daily_sum, day1_users_fmt)
 
@@ -364,7 +372,7 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
         worksheet.write(f'A{cursor}', f"    {location}", main_site_loc_format)
         worksheet.write(f'C{cursor}', len(loc_df), main_site_format)
         worksheet.write(f'D{cursor}', loc_df['client_mac'].nunique(), main_site_format)
-        worksheet.write(f'E{cursor}', int(loc_df.groupby(loc_df['session_date'].dt.normalize())['client_mac'].nunique().sum()), main_site_format)
+        worksheet.write(f'E{cursor}', int(loc_df.groupby([loc_df['session_date'].dt.normalize(), group_col])['client_mac'].nunique().sum()), main_site_format)
 
         for i, day in enumerate(date_cols):
             base_col = 5 + (i * 2)
@@ -385,7 +393,7 @@ def generate_site_report(df, sheet_name, workbook, date_cols, aggregate_floors=F
             worksheet.write(f'B{cursor}', f"    {ssid}", ssid_name_format)
             worksheet.write(f'C{cursor}', len(ssid_df), ssid_format)
             worksheet.write(f'D{cursor}', ssid_df['client_mac'].nunique(), ssid_format)
-            worksheet.write(f'E{cursor}', int(ssid_df.groupby(ssid_df['session_date'].dt.normalize())['client_mac'].nunique().sum()), ssid_format)
+            worksheet.write(f'E{cursor}', int(ssid_df.groupby([ssid_df['session_date'].dt.normalize(), group_col])['client_mac'].nunique().sum()), ssid_format)
 
             for i, day in enumerate(date_cols):
                 base_col = 5 + (i * 2)
